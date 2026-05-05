@@ -545,25 +545,25 @@ class Config:
                 "item": "Item 1 - Slow / uncertain spare part",
                 "lead_time_mode": "constant",
                 "title": "Slow mover - constant lead time",
-                "intro": "Lead time is constant at 1 month throughout the game.",
+                "intro": "You are going to play a slow-moving spare part scenario with constant 1-month lead time. Demand is irregular and can include sudden spikes, so read the item and planning information carefully before choosing your ROP.",
             },
             {
                 "item": "Item 1 - Slow / uncertain spare part",
                 "lead_time_mode": "changing",
                 "title": "Slow mover - changing lead time",
-                "intro": "Lead time will change over time. Notice the changes and adjust your ROP.",
+                "intro": "You are about to play the slow-moving spare part again, but this time lead time can change during the game. Watch for the lead-time messages and adjust your ROP when the supply situation changes.",
             },
             {
                 "item": "Item 2 - Stable / high sales item",
                 "lead_time_mode": "constant",
                 "title": "Fast mover - constant lead time",
-                "intro": "Lead time is constant at 1 month throughout the game.",
+                "intro": "You are going to play a fast-moving item with constant 1-month lead time. Demand is higher and more active, so stockouts can grow quickly if the ROP is too low.",
             },
             {
                 "item": "Item 2 - Stable / high sales item",
                 "lead_time_mode": "changing",
                 "title": "Fast mover - changing lead time",
-                "intro": "Lead time will change over time. Notice the changes and adjust your ROP.",
+                "intro": "You are about to play the fast-moving item with changing lead time. This is the most challenging round: demand is high and supply delays can create backlog quickly, so react carefully.",
             },
         ]
 
@@ -1180,22 +1180,21 @@ def run_month(player_rop):
     st.session_state.inventory = ending_inventory
     st.session_state.backlog = ending_backlog
 
-    # Corrected inventory position after current demand is processed:
-    # Ending Inventory + Pipeline - Ending Backlog.
-    # This is the value used to decide whether an EOQ order should be triggered.
+    # Corrected inventory position after current demand is processed.
+    # This is the value used to decide whether an order-up-to order should be triggered.
     inventory_position_before_order = ending_inventory + pipeline_total() - ending_backlog
 
     # 4. Automatic reorder logic.
-    # If Inventory Position is less than or equal to ROP,
-    # the system automatically places one EOQ order.
-    # Inventory Position = Ending Inventory + Pipeline - Ending Backlog.
+    # If Inventory Position <= ROP, order up to Stock Max.
+    # Stock Max = ROP + EOQ. Order Qty = Stock Max - Inventory Position.
     auto_order_qty = 0
     auto_order_arrival = None
     item_eoq = cfg.get_item_eoq(item_name)
+    stock_max = player_rop + item_eoq
     reorder_triggered = inventory_position_before_order <= player_rop
 
     if reorder_triggered:
-        auto_order_qty = item_eoq
+        auto_order_qty = max(0, stock_max - inventory_position_before_order)
         auto_order_arrival = month + lead_time
         st.session_state.pipeline.append({
             "arrival": auto_order_arrival,
@@ -1219,6 +1218,7 @@ def run_month(player_rop):
         "Lead Time": lead_time,
         "ROP Used": player_rop,
         "EOQ": item_eoq,
+        "Stock Max": stock_max,
         "Starting Inventory": starting_inventory,
         "Incoming Purchases": incoming,
         "Inventory After Incoming": inventory_after_incoming,
@@ -1231,6 +1231,7 @@ def run_month(player_rop):
         "Ending Inventory": ending_inventory,
         "Inventory Position Before Order": inventory_position_before_order,
         "Inventory Position Formula": "Ending Inventory + Pipeline - Ending Backlog",
+        "Order Rule": "If Inventory Position <= ROP, order up to Stock Max (ROP + EOQ)",
         "Reorder Triggered": "Yes" if reorder_triggered else "No",
         "PO Placed": auto_order_qty,
         "PO Arrival Month": get_game_month_label(auto_order_arrival) if auto_order_arrival is not None and auto_order_arrival <= cfg.months else auto_order_arrival if auto_order_arrival is not None else "",
@@ -1270,10 +1271,13 @@ def simulate_fixed_rop_policy(item_name, lead_time_mode, fixed_rop):
         ending_backlog = total_customer_need - fulfilled
         inventory_position_before_order = ending_inventory + sum(x["qty"] for x in pipeline) - ending_backlog
 
+        item_eoq = cfg.get_item_eoq(item_name)
+        stock_max = fixed_rop + item_eoq
+
         if inventory_position_before_order <= fixed_rop:
             pipeline.append({
                 "arrival": month + lead_time,
-                "qty": cfg.get_item_eoq(item_name),
+                "qty": max(0, stock_max - inventory_position_before_order),
             })
 
         inventory = ending_inventory
@@ -1290,6 +1294,7 @@ def simulate_fixed_rop_policy(item_name, lead_time_mode, fixed_rop):
             "Calendar Month": get_game_month_label(month),
             "Policy": f"Baseline ROP {fixed_rop}",
             "ROP Used": fixed_rop,
+            "Stock Max": stock_max,
             "Lead Time": lead_time,
             "New Demand": new_demand,
             "Total Customer Need": total_customer_need,
@@ -1586,8 +1591,12 @@ def animate_month(row):
         "#ffb347"
     )
 
-    po_message = "Automatic EOQ order created" if row["Reorder Triggered"] == "Yes" else "No order created"
-    po_detail = f"PO Qty: {row['PO Placed']} | Arrival: {row['PO Arrival Month']}" if row["Reorder Triggered"] == "Yes" else "Inventory position stayed above ROP"
+    po_message = "Order-up-to replenishment created" if row["Reorder Triggered"] == "Yes" else "No order created"
+    po_detail = (
+        f"PO Qty: {row['PO Placed']} | Stock Max: {row['Stock Max']} | Arrival: {row['PO Arrival Month']}"
+        if row["Reorder Triggered"] == "Yes"
+        else "Inventory position stayed above ROP"
+    )
 
     lead_time_alert = get_lead_time_alert(row["Month"])
     alert_html = ""
@@ -2004,18 +2013,6 @@ if not st.session_state.player_ready:
     name_input = st.text_input("Your name")
     email_input = st.text_input("Your email")
 
-    selected_scenario_title = st.selectbox(
-        "Choose starting scenario",
-        [variant["title"] for variant in cfg.game_variants],
-        index=0,
-        help="After each scenario, the game continues to the next version."
-    )
-    selected_variant_index = [variant["title"] for variant in cfg.game_variants].index(selected_scenario_title)
-    selected_item = cfg.game_variants[selected_variant_index]["item"]
-
-    st.info(cfg.items[selected_item]["description"])
-    st.info(cfg.game_variants[selected_variant_index]["intro"])
-
     start_clicked = st.button("Start game", type="primary")
 
     if start_clicked:
@@ -2026,7 +2023,7 @@ if not st.session_state.player_ready:
         else:
             st.session_state.player_name = name_input.strip()
             st.session_state.player_email = email_input.strip().lower()
-            st.session_state.variant_index = selected_variant_index
+            st.session_state.variant_index = 0
             st.session_state.player_ready = True
             init_game()
             st.rerun()
@@ -2039,7 +2036,11 @@ if not st.session_state.get("scenario_notice_seen", False):
     if hasattr(st, "dialog"):
         @st.dialog(st.session_state.scenario_title)
         def show_scenario_notice():
+            scenario_number = st.session_state.variant_index + 1
+            total_scenarios = len(cfg.game_variants)
+            st.markdown(f"## Scenario {scenario_number} / {total_scenarios}")
             st.markdown(st.session_state.scenario_intro)
+            st.markdown("Review the planning logic, demand timeline, current inventory position, and lead-time information before playing the first month.")
             if st.button("Start this scenario", type="primary"):
                 st.session_state.scenario_notice_seen = True
                 st.rerun()
@@ -2080,7 +2081,8 @@ st.markdown(f"""
     <div class="small-note">• Initial Inventory = {current_initial_inventory}</div>
     <div class="small-note">• Initial ROP = {current_initial_rop}</div>
     <div class="small-note">• EOQ = {current_eoq}</div>
-    <div class="small-note">• Reorder rule: if Inventory Position ≤ ROP, the system automatically creates one EOQ order.</div>
+    <div class="small-note">• Stock Max = ROP + EOQ.</div>
+    <div class="small-note">• Reorder rule: if Inventory Position ≤ ROP, order quantity = Stock Max - Inventory Position.</div>
     <div class="small-note">• Inventory Position = Stock on Hand + Pipeline - Backorders.</div>
     <div class="small-note">• {lead_time_rule_text}</div>
     <div style="margin-top:10px;">
@@ -2143,13 +2145,14 @@ status1, status2, status3, status4 = st.columns(4)
 status1.metric("Current Month", f"{month_shown} / {cfg.months}", get_game_month_label(month_shown))
 status2.metric("Current ROP", st.session_state.current_rop)
 status3.metric("Current EOQ", cfg.get_item_eoq(st.session_state.selected_item))
-status4.metric("Lead Time", cfg.lead_time(month_shown, current_lead_time_mode()))
+status4.metric("Stock Max", st.session_state.current_rop + cfg.get_item_eoq(st.session_state.selected_item))
 
-inv1, inv2, inv3, inv4 = st.columns(4)
+inv1, inv2, inv3, inv4, inv5 = st.columns(5)
 inv1.metric("Inventory On Hand", st.session_state.inventory)
 inv2.metric("Pipeline", pipeline_total())
 inv3.metric("Inventory Position", inventory_position())
 inv4.metric("Backlog", st.session_state.backlog)
+inv5.metric("Lead Time", cfg.lead_time(month_shown, current_lead_time_mode()))
 
 st.markdown('</div>', unsafe_allow_html=True)
 

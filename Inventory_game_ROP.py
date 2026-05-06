@@ -673,6 +673,7 @@ def init_game():
     st.session_state.report_saved_current = False
     st.session_state.lead_time_event_seen = []
     st.session_state.round_complete_seen = False
+    st.session_state.submission_warning = None
 
 
 if "player_ready" not in st.session_state:
@@ -709,6 +710,8 @@ if "lead_time_event_seen" not in st.session_state:
     st.session_state.lead_time_event_seen = []
 if "round_complete_seen" not in st.session_state:
     st.session_state.round_complete_seen = False
+if "submitted_scenario_keys" not in st.session_state:
+    st.session_state.submitted_scenario_keys = []
 
 if migrating_to_variant_flow and st.session_state.get("player_ready", False):
     init_game()
@@ -856,7 +859,7 @@ def render_inventory_block_html(on_hand_qty, inventory_position_qty, border_colo
             z-index: 2;
             box-shadow: 0 8px 28px rgba(0,0,0,0.35);
         ">
-            <div style="font-size: 1.9rem; font-weight: 800; margin-bottom: 4px; color: #ffffff;">🏭 Inventory</div>
+            <div style="font-size: 1.9rem; font-weight: 800; margin-bottom: 4px; color: #ffffff;">🏭 Warehouse</div>
             <div style="color: #ffffff; font-size: 0.88rem; margin-bottom: 12px;">One block, two planning views</div>
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
@@ -1569,6 +1572,18 @@ def make_trend_chart(report_trends, metric):
 # =========================================================
 
 def animate_month(row):
+    incoming_move_html = '<div class="moving1">📦 📦 📦</div>' if row["Incoming Purchases"] > 0 else ""
+    fulfilled_move_html = '<div class="moving2">🔩 🔩 🔩</div>' if row["Fulfilled"] > 0 else ""
+    demand_pop_html = '<div class="demand-pop">🧍 🧍 🧍</div>' if row["New Demand"] > 0 else ""
+    po_move_html = '<div class="moving-po">📄<span>PO</span></div>' if row["Reorder Triggered"] == "Yes" else ""
+    sound_calls = []
+    if row["Incoming Purchases"] > 0:
+        sound_calls.append("playTone(420, 0.05, 0.22, 0.045);")
+    if row["Fulfilled"] > 0:
+        sound_calls.append("playTone(620, 0.06, 0.18, 0.035);")
+    if row["Reorder Triggered"] == "Yes":
+        sound_calls.append("playTone(880, 0.72, 0.10, 0.035); playTone(1170, 0.84, 0.12, 0.03);")
+
     supplier_node = render_node_html(
         "📦 Supplier",
         "Pipeline / open orders",
@@ -1736,7 +1751,28 @@ def animate_month(row):
             font-size: 1.9rem;
             opacity: 0;
             animation: inventory_to_customers 1.2s ease-in-out forwards;
-            animation-delay: 1.1s;
+            animation-delay: 0s;
+        }}
+
+        .moving-po {{
+            position: absolute;
+            top: 116px;
+            left: 43%;
+            font-size: 2rem;
+            opacity: 0;
+            animation: warehouse_to_supplier_po 1.05s ease-in-out forwards;
+            animation-delay: 0.25s;
+            z-index: 5;
+            filter: drop-shadow(0 8px 14px rgba(0,0,0,0.35));
+        }}
+
+        .moving-po span {{
+            position: absolute;
+            left: 7px;
+            top: 13px;
+            font-size: 0.48rem;
+            font-weight: 900;
+            color: #111827;
         }}
 
         .demand-pop {{
@@ -1759,6 +1795,12 @@ def animate_month(row):
             0% {{ left: 45%; opacity: 0; }}
             10% {{ opacity: 1; }}
             100% {{ left: 78%; opacity: 1; }}
+        }}
+
+        @keyframes warehouse_to_supplier_po {{
+            0% {{ left: 43%; opacity: 0; transform: rotate(-6deg) scale(0.8); }}
+            10% {{ opacity: 1; }}
+            100% {{ left: 12%; opacity: 1; transform: rotate(7deg) scale(1.05); }}
         }}
 
         @keyframes demand_appear {{
@@ -1856,9 +1898,10 @@ def animate_month(row):
             {alert_html}
 
             <div class="flow">
-                <div class="moving1">📦 📦 📦</div>
-                <div class="moving2">🔩 🔩 🔩</div>
-                <div class="demand-pop">🧍 🧍 🧍</div>
+                {incoming_move_html}
+                {fulfilled_move_html}
+                {demand_pop_html}
+                {po_move_html}
 
                 <div class="col">
                     {supplier_node}
@@ -1880,15 +1923,15 @@ def animate_month(row):
                     {inventory_node}
                     <div class="mini-grid-3">
                         <div class="mini">
-                            <div class="mini-label">Ending Inventory</div>
+                            <div class="mini-label">Ending Warehouse Stock</div>
                             <div class="mini-value">{row["Ending Inventory"]}</div>
                         </div>
                         <div class="mini">
-                            <div class="mini-label">Inventory Position Before Order</div>
+                            <div class="mini-label">Warehouse Position Before Order</div>
                             <div class="mini-value">{row["Inventory Position Before Order"]}</div>
                         </div>
                         <div class="mini cost-mini">
-                            <div class="mini-label">Inventory Cost</div>
+                            <div class="mini-label">Warehouse Cost</div>
                             <div class="mini-value cost-value">{int(row["Inventory Holding Cost"])}</div>
                         </div>
                     </div>
@@ -1944,9 +1987,7 @@ def animate_month(row):
                     // Some browsers block autoplayed sound. The animation still runs.
                 }}
             }}
-            playTone(420, 0.05, 0.22, 0.045);
-            playTone(620, 0.34, 0.18, 0.035);
-            playTone(310, 1.18, 0.25, 0.04);
+            {" ".join(sound_calls)}
         </script>
     </body>
     </html>
@@ -2280,10 +2321,12 @@ if st.session_state.history:
 # SECTION 12: AUTO-SUBMIT WHEN GAME ENDS
 # =========================================================
 
+submission_key = f"{st.session_state.player_email}|{st.session_state.variant_index}|{st.session_state.get('scenario_title', '')}"
+
 if (
     st.session_state.history
     and st.session_state.month > cfg.months
-    and not st.session_state.submitted
+    and submission_key not in st.session_state.submitted_scenario_keys
 ):
     df = pd.DataFrame(st.session_state.history)
 
@@ -2305,6 +2348,8 @@ if (
         "player_email": st.session_state.player_email,
         "item": st.session_state.selected_item,
         "scenario": st.session_state.scenario_title,
+        "scenario_number": st.session_state.variant_index + 1,
+        "scenario_key": submission_key,
         "lead_time_mode": current_lead_time_mode(),
         "service_level": round(service_level * 100, 1),
         "total_inventory_cost": round(total_inventory_cost, 0),
@@ -2326,6 +2371,7 @@ if (
 
     if not results_submission_configured():
         st.session_state.submitted = True
+        st.session_state.submitted_scenario_keys.append(submission_key)
         st.info("Result submission is not configured yet, so this run was kept local.")
     else:
         try:
@@ -2338,9 +2384,11 @@ if (
 
             if response_ok:
                 st.session_state.submitted = True
+                st.session_state.submitted_scenario_keys.append(submission_key)
                 st.success("Your result has been submitted.")
             else:
                 st.session_state.submitted = True
+                st.session_state.submitted_scenario_keys.append(submission_key)
                 st.session_state.submission_warning = (
                     "The report was generated, but Google Sheets submission did not confirm success. "
                     "Please check the Apps Script deployment and permissions."
@@ -2348,6 +2396,7 @@ if (
 
         except Exception as e:
             st.session_state.submitted = True
+            st.session_state.submitted_scenario_keys.append(submission_key)
             st.session_state.submission_warning = (
                 "The report was generated, but this computer could not connect to Google Sheets. "
                 "This usually happens when Python cannot reach script.google.com through the local network or proxy."
@@ -2472,59 +2521,4 @@ if st.session_state.history and st.session_state.month > cfg.months:
             st.rerun()
     else:
         st.markdown('<div class="section-title">Game completed</div>', unsafe_allow_html=True)
-        st.markdown("You have completed all item and lead-time scenarios.")
-        if st.session_state.completed_reports:
-            completed_df = pd.DataFrame(st.session_state.completed_reports)
-            display_cols = [
-                "Scenario",
-                "Average Stock",
-                "Average Pipeline",
-                "Inventory Cost",
-                "Backlog Cost",
-                "Total Cost",
-                "Fill Rate",
-            ]
-            st.dataframe(completed_df[display_cols], use_container_width=True, hide_index=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# =========================================================
-# SECTION 12C: INVENTORY POSITION VS ROP GRAPH
-# =========================================================
-
-if st.session_state.history:
-    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Inventory Position vs ROP</div>', unsafe_allow_html=True)
-    inventory_rop_chart = build_inventory_position_rop_svg()
-    html(inventory_rop_chart, height=190)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# =========================================================
-# SECTION 13: TABLE
-# =========================================================
-
-if st.session_state.history:
-    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Month-by-month table</div>', unsafe_allow_html=True)
-    st.dataframe(pd.DataFrame(st.session_state.history), use_container_width=True, height=420)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# =========================================================
-# SECTION 14: GRAPH
-# =========================================================
-
-if st.session_state.history:
-    chart_df = pd.DataFrame(st.session_state.history).set_index("Month")
-
-    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Trends</div>', unsafe_allow_html=True)
-    st.line_chart(chart_df[[
-        "Ending Inventory",
-        "Ending Backlog",
-        "Pipeline",
-        "Inventory Position After Order",
-        "Total Customer Need"
-    ]])
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("You have completed all item and lea

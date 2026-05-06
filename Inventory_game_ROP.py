@@ -2521,4 +2521,59 @@ if st.session_state.history and st.session_state.month > cfg.months:
             st.rerun()
     else:
         st.markdown('<div class="section-title">Game completed</div>', unsafe_allow_html=True)
-        st.markdown("You have completed all item and lea
+        st.markdown("You have completed all item and lead-time scenarios.")
+        if st.session_state.completed_reports:
+            completed_df = pd.DataFrame(st.session_state.completed_reports)
+            display_cols = [
+                "Scenario",
+                "Average Stock",
+                "Average Pipeline",
+                "Inventory Cost",
+                "Backlog Cost",
+                "Total Cost",
+                "Fill Rate",
+            ]
+            st.dataframe(completed_df[display_cols], use_container_width=True, hide_index=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =========================================================
+# SECTION 12C: INVENTORY POSITION VS ROP GRAPH
+# =========================================================
+
+if st.session_state.history:
+    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Inventory Position vs ROP</div>', unsafe_allow_html=True)
+    inventory_rop_chart = build_inventory_position_rop_svg()
+    html(inventory_rop_chart, height=190)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =========================================================
+# SECTION 13: TABLE
+# =========================================================
+
+if st.session_state.history:
+    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Month-by-month table</div>', unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(st.session_state.history), use_container_width=True, height=420)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =========================================================
+# SECTION 14: GRAPH
+# =========================================================
+
+if st.session_state.history:
+    chart_df = pd.DataFrame(st.session_state.history).set_index("Month")
+
+    st.markdown('<div class="dashboard-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Trends</div>', unsafe_allow_html=True)
+    st.line_chart(chart_df[[
+        "Ending Inventory",
+        "Ending Backlog",
+        "Pipeline",
+        "Inventory Position After Order",
+        "Total Customer Need"
+    ]])
+    st.markdown('</div>', unsafe_allow_html=True)
